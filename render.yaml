@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: absensi-team-technical-onecall
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: MEMBER_PASSWORD
+        value: "123456"

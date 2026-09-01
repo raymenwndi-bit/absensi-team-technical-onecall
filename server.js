@@ -1,0 +1,20 @@
+import express from "express";
+import Database from "better-sqlite3";
+import crypto from "crypto";
+const app=express(),port=process.env.PORT||3000;
+const db=new Database(process.env.DB_PATH||"./attendance.db");
+db.exec(`CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,username TEXT UNIQUE,password TEXT,role TEXT);
+CREATE TABLE IF NOT EXISTS attendance(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,type TEXT,time TEXT,lat REAL,lng REAL,accuracy REAL,photo TEXT);`);
+const names=["Raymen Wendi","M Andi Alfian","M Farid Rahmatullah","M Nur Chafid","Mukhamad Yusuf","Iqbal","Mahadian Putra Prima","Andhika"];
+const hash=x=>crypto.createHash("sha256").update(x).digest("hex");
+const slug=x=>x.toLowerCase().replace(/[^a-z0-9]+/g,".").replace(/^\.|\.$/g,"");
+if(!db.prepare("SELECT 1 FROM users WHERE username='admin'").get())db.prepare("INSERT INTO users(name,username,password,role) VALUES(?,?,?,'admin')").run("Administrator","admin",hash(process.env.ADMIN_PASSWORD||"admin123"));
+for(const n of names)if(!db.prepare("SELECT 1 FROM users WHERE name=?").get(n))db.prepare("INSERT INTO users(name,username,password,role) VALUES(?,?,?,'member')").run(n,slug(n),hash(process.env.MEMBER_PASSWORD||"123456"));
+app.use(express.json({limit:"4mb"}));app.use(express.static("public"));
+const sessions=new Map();
+function auth(req,res,next){const u=sessions.get(req.headers.authorization||"");if(!u)return res.status(401).json({error:"Belum login"});req.user=u;next()}
+app.post("/api/login",(req,res)=>{let u=db.prepare("SELECT * FROM users WHERE username=?").get(req.body.username||"");if(!u||u.password!==hash(req.body.password||""))return res.status(401).json({error:"Username/password salah"});let t=crypto.randomBytes(24).toString("hex"),user={id:u.id,name:u.name,username:u.username,role:u.role};sessions.set(t,user);res.json({token:t,user})});
+app.get("/api/attendance",auth,(req,res)=>{let q=req.user.role==="admin"?db.prepare("SELECT a.*,u.name FROM attendance a JOIN users u ON u.id=a.user_id ORDER BY a.time DESC").all():db.prepare("SELECT a.*,u.name FROM attendance a JOIN users u ON u.id=a.user_id WHERE user_id=? ORDER BY a.time DESC").all(req.user.id);res.json(q)});
+app.post("/api/attendance",auth,(req,res)=>{if(req.user.role!=="member")return res.status(403).json({error:"Admin tidak dapat absen"});let {type,photo,lat,lng,accuracy}=req.body||{};if(!photo||!["Masuk","Pulang"].includes(type))return res.status(400).json({error:"Selfie dan tipe absensi wajib"});let day=new Date().toISOString().slice(0,10);if(db.prepare("SELECT 1 FROM attendance WHERE user_id=? AND type=? AND date(time)=?").get(req.user.id,type,day))return res.status(409).json({error:"Absensi sudah ada hari ini"});db.prepare("INSERT INTO attendance(user_id,type,time,lat,lng,accuracy,photo) VALUES(?,?,?,?,?,?,?)").run(req.user.id,type,new Date().toISOString(),lat||null,lng||null,accuracy||null,photo);res.json({ok:true})});
+app.get("/api/export.csv",auth,(req,res)=>{if(req.user.role!=="admin")return res.sendStatus(403);let rows=db.prepare("SELECT u.name,a.type,a.time,a.lat,a.lng,a.accuracy FROM attendance a JOIN users u ON u.id=a.user_id ORDER BY a.time DESC").all();let e=x=>`"${String(x??"").replaceAll('"','""')}"`;res.type("text/csv").send([["Nama","Tipe","Waktu","Latitude","Longitude","Akurasi"],...rows.map(x=>[x.name,x.type,x.time,x.lat,x.lng,x.accuracy])].map(r=>r.map(e).join(",")).join("\n"))});
+app.listen(port,()=>console.log("Onecall attendance running on "+port));
